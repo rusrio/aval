@@ -16,6 +16,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 import {BaseTest} from "./BaseTest.sol";
 import {AvalHook} from "../../src/AvalHook.sol";
+import {AvalLens} from "../../src/AvalLens.sol";
 import {PolicyLib} from "../../src/libraries/PolicyLib.sol";
 
 /// @notice Shared setup: v4 artifacts, mWETH/mUSDC, AvalHook at a flagged address, one pool at ~3000 USDC/ETH.
@@ -31,6 +32,7 @@ abstract contract AvalFixture is BaseTest {
     MockERC20 internal usdc;
     MockERC20 internal weth;
     AvalHook internal hook;
+    AvalLens internal lens;
     PoolKey internal key;
     PoolId internal poolId;
     bool internal usdcIs0;
@@ -62,6 +64,7 @@ abstract contract AvalFixture is BaseTest {
         deployCodeTo("AvalHook.sol:AvalHook", abi.encode(poolManager, address(usdc), allowed, TWAP_WINDOW), flags);
         hook = AvalHook(flags);
         vm.label(flags, "AvalHook");
+        lens = new AvalLens(hook);
 
         key = PoolKey({
             currency0: Currency.wrap(usdcIs0 ? address(usdc) : address(weth)),

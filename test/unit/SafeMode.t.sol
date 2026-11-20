@@ -43,7 +43,7 @@ contract SafeModeTest is AvalFixture {
     function _enterSafeMode() internal {
         _rally();
         hook.settleEpoch(weak);
-        assertTrue(hook.getVault(weak).safeMode, "precondition: safe mode");
+        assertTrue(lens.getVault(weak).safeMode, "precondition: safe mode");
     }
 
     // ------------------------------------------------------------------
@@ -56,14 +56,14 @@ contract SafeModeTest is AvalFixture {
         emit SafeModeEntered(weak, 0);
         hook.settleEpoch(weak);
 
-        AvalHook.Vault memory v = hook.getVault(weak);
+        AvalHook.Vault memory v = lens.getVault(weak);
         assertTrue(v.safeMode);
         assertLt(v.bond, hook.MIN_BOND());
     }
 
     function test_safeMode_movesToFullRange() public {
         _enterSafeMode();
-        AvalHook.Vault memory v = hook.getVault(weak);
+        AvalHook.Vault memory v = lens.getVault(weak);
         assertEq(v.tickLower, TickMath.minUsableTick(60));
         assertEq(v.tickUpper, TickMath.maxUsableTick(60));
         assertGt(v.liquidity, 0);
@@ -72,21 +72,21 @@ contract SafeModeTest is AvalFixture {
     function test_safeMode_notEnteredWithHealthyBond() public {
         _rally();
         hook.settleEpoch(honest);
-        assertFalse(hook.getVault(honest).safeMode);
+        assertFalse(lens.getVault(honest).safeMode);
     }
 
     function test_safeMode_skipsRedeployWhenSpotFarFromTwap() public {
         _rally();
         swap(!usdcIs0, 20 ether); // spot dumps in the settlement block, TWAP barely moves
         hook.settleEpoch(weak);
-        AvalHook.Vault memory v = hook.getVault(weak);
+        AvalHook.Vault memory v = lens.getVault(weak);
         assertTrue(v.safeMode, "still enters safe mode");
         assertEq(v.liquidity, 0, "no deployment at a manipulated spot");
 
         // Once spot and TWAP agree again, the next settlement deploys full range.
         warpAndRoll(defaultPolicy().epochLength);
         hook.settleEpoch(weak);
-        assertGt(hook.getVault(weak).liquidity, 0);
+        assertGt(lens.getVault(weak).liquidity, 0);
     }
 
     // ------------------------------------------------------------------
@@ -117,7 +117,7 @@ contract SafeModeTest is AvalFixture {
         vm.prank(carol);
         hook.claimShares(weak);
         assertGt(hook.sharesOf(weak, carol), 0);
-        assertGt(hook.getVault(weak).liquidity, 0);
+        assertGt(lens.getVault(weak).liquidity, 0);
     }
 
     function test_safeMode_withdrawStillWorks() public {
@@ -126,7 +126,7 @@ contract SafeModeTest is AvalFixture {
         hook.claimShares(weak);
         hook.withdraw(weak, hook.sharesOf(weak, bob), 0, 0);
         vm.stopPrank();
-        AvalHook.Vault memory v = hook.getVault(weak);
+        AvalHook.Vault memory v = lens.getVault(weak);
         assertEq(v.totalShares, 0);
         assertLe(v.liquidity, 1);
     }
@@ -137,12 +137,12 @@ contract SafeModeTest is AvalFixture {
 
     function test_safeMode_exitWhenBondToppedUp() public {
         _enterSafeMode();
-        uint256 missing = hook.MIN_BOND() - hook.getVault(weak).bond;
+        uint256 missing = hook.MIN_BOND() - lens.getVault(weak).bond;
         vm.prank(owner);
         vm.expectEmit(true, false, false, false, address(hook));
         emit SafeModeExited(weak);
         hook.addBond(weak, missing);
-        assertFalse(hook.getVault(weak).safeMode);
+        assertFalse(lens.getVault(weak).safeMode);
 
         warpAndRoll(defaultPolicy().cooldown);
         (int24 lower, int24 upper) = rangeAround(spotTick(), 600);
@@ -154,6 +154,6 @@ contract SafeModeTest is AvalFixture {
         _enterSafeMode();
         vm.prank(owner);
         hook.addBond(weak, 1);
-        assertTrue(hook.getVault(weak).safeMode);
+        assertTrue(lens.getVault(weak).safeMode);
     }
 }

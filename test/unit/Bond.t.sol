@@ -35,7 +35,7 @@ contract BondTest is AvalFixture {
         uint256 id = _vaultWithBond(minBond);
         vm.prank(owner);
         hook.addBond(id, 500e6);
-        assertEq(hook.getVault(id).bond, minBond + 500e6);
+        assertEq(lens.getVault(id).bond, minBond + 500e6);
 
         vm.prank(alice);
         vm.expectRevert(AvalHook.OnlyOwner.selector);
@@ -49,7 +49,7 @@ contract BondTest is AvalFixture {
     function test_deposit_upToCap() public {
         uint256 id = _vaultWithBond(minBond);
         depositAs(alice, id, _cap(minBond), 0);
-        assertEq(hook.getVault(id).pending0 + hook.getVault(id).pending1, _cap(minBond));
+        assertEq(lens.getVault(id).pending0 + lens.getVault(id).pending1, _cap(minBond));
     }
 
     function test_revert_deposit_aboveCap() public {
@@ -101,7 +101,7 @@ contract BondTest is AvalFixture {
         vm.prank(owner);
         hook.executeBondWithdrawal(id);
         assertEq(usdc.balanceOf(owner) - before, minBond);
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         assertEq(v.bond, 2 * minBond);
         assertEq(v.bondWithdrawalAmount, 0);
     }
@@ -164,7 +164,7 @@ contract BondTest is AvalFixture {
         settleAfterEpoch(id);
         vm.prank(owner);
         hook.executeBondWithdrawal(id);
-        assertEq(hook.getVault(id).bond, 0);
+        assertEq(lens.getVault(id).bond, 0);
     }
 
     function test_revert_bondWithdrawal_onlyOwner() public {

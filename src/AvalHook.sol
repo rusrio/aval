@@ -607,46 +607,19 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     // Views
     // ------------------------------------------------------------------
 
-    /// @notice Full vault state.
-    function getVault(uint256 vaultId) external view returns (Vault memory) {
-        return _vaults[vaultId];
-    }
-
-    /// @notice TWAP tick of a pool over `twapWindow`. Reverts if not warm.
-    function getTwapTick(PoolId id) external view returns (int24) {
-        (, int24 spotTick,,) = poolManager.getSlot0(id);
-        return _oracles[id].consult(spotTick, twapWindow);
-    }
-
-    /// @notice True if the pool's oracle covers `twapWindow`.
-    function isTwapWarm(PoolId id) external view returns (bool) {
-        return _oracles[id].isWarm(twapWindow);
-    }
-
-    /// @notice Active vault value (position + idle + uncollected fees) at TWAP, in bond token. Excludes queued deposits.
-    function getVaultValue(uint256 vaultId) external view returns (uint256) {
-        Vault storage v = _vault(vaultId);
-        PoolId id = v.key.toId();
-        uint160 sqrtTwap = TickMath.getSqrtPriceAtTick(_twapTick(id));
-        return _vaultValue(vaultId, v, id, sqrtTwap, pools[id].bondIsToken0);
-    }
-
-    /// @notice Benchmark and vault value at TWAP, both in bond token and for the current total shares.
-    /// @return benchmark Value a passive full-range position would have now (0 if the epoch started empty).
-    /// @return value Active vault value (excludes queued deposits).
-    function getPerformance(uint256 vaultId) external view returns (uint256 benchmark, uint256 value) {
-        Vault storage v = _vault(vaultId);
-        PoolId id = v.key.toId();
-        uint160 sqrtTwap = TickMath.getSqrtPriceAtTick(_twapTick(id));
-        bool bond0 = pools[id].bondIsToken0;
-        value = _vaultValue(vaultId, v, id, sqrtTwap, bond0);
-        benchmark = _benchmark(v, sqrtTwap, bond0);
-    }
-
-    /// @notice Current dynamic fee (pips) the pool would charge.
-    function currentFee(PoolId id) external view returns (uint24) {
-        (, int24 tick,,) = poolManager.getSlot0(id);
-        return _dynamicFee(_oracles[id], tick);
+    /// @notice Raw storage read of `nSlots` consecutive slots from `startSlot`. All views (vault state, TWAP,
+    ///         valuation, benchmark) live in AvalLens, which decodes this contract's storage layout.
+    /// @param startSlot First slot.
+    /// @param nSlots Number of slots.
+    function extsload(bytes32 startSlot, uint256 nSlots) external view returns (bytes32[] memory values) {
+        values = new bytes32[](nSlots);
+        assembly ("memory-safe") {
+            let ptr := add(values, 0x20)
+            for { let i := 0 } lt(i, nSlots) { i := add(i, 1) } { mstore(
+                add(ptr, shl(5, i)),
+                sload(add(startSlot, i))
+            ) }
+        }
     }
 
     // ------------------------------------------------------------------

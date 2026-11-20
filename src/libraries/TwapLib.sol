@@ -94,6 +94,29 @@ library TwapLib {
         return (true, int24(avg));
     }
 
+    /// @notice `tryConsult` on an oracle copied to memory (used by off-hook readers such as AvalLens).
+    /// @dev Must stay equivalent to `tryConsult`; covered by AvalLens tests against the hook's own TWAP checks.
+    function tryConsultMemory(Oracle memory self, int24 currentTick, uint32 window)
+        internal
+        view
+        returns (bool ok, int24 twapTick)
+    {
+        uint32 nowTs = uint32(block.timestamp);
+        if (window == 0 || nowTs < window) return (false, 0);
+        uint32 target = nowTs - window;
+        for (uint256 i; i < self.count; ++i) {
+            Checkpoint memory ck = self.checkpoints[(uint256(self.index) + CARDINALITY - i) % CARDINALITY];
+            if (ck.timestamp > target) continue;
+            int64 cumulative = self.tickCumulative + int64(currentTick) * int64(uint64(nowTs - self.lastTimestamp));
+            int64 delta = cumulative - ck.tickCumulative;
+            int64 elapsed = int64(uint64(nowTs - ck.timestamp));
+            int64 avg = delta / elapsed;
+            if (delta < 0 && delta % elapsed != 0) avg--;
+            return (true, int24(avg));
+        }
+        return (false, 0);
+    }
+
     /// @dev Newest checkpoint with timestamp <= now - window. Bounded by CARDINALITY iterations.
     function _findCheckpoint(Oracle storage self, uint32 window)
         private

@@ -15,6 +15,7 @@ import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 import {Deployers} from "test/utils/Deployers.sol";
 import {AvalHook} from "src/AvalHook.sol";
+import {AvalLens} from "src/AvalLens.sol";
 import {PolicyLib} from "src/libraries/PolicyLib.sol";
 
 /// @notice Deploys mocks (mUSDC, mWETH), the AvalHook at a mined address, the mWETH/mUSDC pool and two demo
@@ -63,9 +64,10 @@ contract Deploy is Script, Deployers {
         uint256 vaultB = hook.createVault(key, policy, cfg.agentB, BOND, sqrtPrice);
         _seed(hook, vaultA, address(usdc) < address(weth));
         _seed(hook, vaultB, address(usdc) < address(weth));
+        AvalLens lens = new AvalLens(hook);
         vm.stopBroadcast();
 
-        _writeDeployment(cfg, address(usdc), address(weth), hook, key, vaultA, vaultB);
+        _writeDeployment(cfg, address(usdc), address(weth), hook, lens, key, vaultA, vaultB);
     }
 
     // ------------------------------------------------------------------
@@ -134,6 +136,7 @@ contract Deploy is Script, Deployers {
         address usdc,
         address weth,
         AvalHook hook,
+        AvalLens lens,
         PoolKey memory key,
         uint256 vaultA,
         uint256 vaultB
@@ -143,6 +146,7 @@ contract Deploy is Script, Deployers {
         vm.serializeAddress(o, "poolManager", address(poolManager));
         vm.serializeAddress(o, "swapRouter", address(swapRouter));
         vm.serializeAddress(o, "hook", address(hook));
+        vm.serializeAddress(o, "lens", address(lens));
         vm.serializeAddress(o, "mUSDC", usdc);
         vm.serializeAddress(o, "mWETH", weth);
         vm.serializeAddress(o, "currency0", Currency.unwrap(key.currency0));

@@ -44,18 +44,18 @@ contract SlashingTest is AvalFixture {
     }
 
     function _expectedSlash(uint256 vaultId) internal view returns (uint256) {
-        (uint256 bench, uint256 value) = hook.getPerformance(vaultId);
+        (uint256 bench, uint256 value) = lens.getPerformance(vaultId);
         PolicyLib.Policy memory p = defaultPolicy();
-        return PerformanceLib.slashAmount(bench, value, p.toleranceBps, p.slashRatioBps, hook.getVault(vaultId).bond);
+        return PerformanceLib.slashAmount(bench, value, p.toleranceBps, p.slashRatioBps, lens.getVault(vaultId).bond);
     }
 
     function _idleUsdc(uint256 vaultId) internal view returns (uint256) {
-        AvalHook.Vault memory v = hook.getVault(vaultId);
+        AvalHook.Vault memory v = lens.getVault(vaultId);
         return usdcIs0 ? v.idle0 : v.idle1;
     }
 
     function _shareValue(uint256 vaultId, address user) internal view returns (uint256) {
-        return hook.getVaultValue(vaultId) * hook.sharesOf(vaultId, user) / hook.getVault(vaultId).totalShares;
+        return lens.getVaultValue(vaultId) * hook.sharesOf(vaultId, user) / lens.getVault(vaultId).totalShares;
     }
 
     // ------------------------------------------------------------------
@@ -65,35 +65,35 @@ contract SlashingTest is AvalFixture {
     function test_firstEpoch_noBenchmark() public {
         uint256 id = createDefaultVault();
         depositAs(carol, id, 10_000e6, 0);
-        (uint256 bench,) = hook.getPerformance(id);
+        (uint256 bench,) = lens.getPerformance(id);
         assertEq(bench, 0, "no shares at epoch start");
-        uint256 bondBefore = hook.getVault(id).bond;
+        uint256 bondBefore = lens.getVault(id).bond;
         _moveEthPrice(true);
         hook.settleEpoch(id);
-        assertEq(hook.getVault(id).bond, bondBefore);
+        assertEq(lens.getVault(id).bond, bondBefore);
     }
 
     function test_benchmark_startsAtVaultValue() public view {
-        (uint256 bench, uint256 value) = hook.getPerformance(lazy);
+        (uint256 bench, uint256 value) = lens.getPerformance(lazy);
         assertApproxEqRel(bench, value, 1e12);
     }
 
     function test_benchmark_risesWithEthForUsdcBond() public {
-        (uint256 before,) = hook.getPerformance(lazy);
+        (uint256 before,) = lens.getPerformance(lazy);
         _moveEthPrice(true);
-        (uint256 bench, uint256 value) = hook.getPerformance(lazy);
+        (uint256 bench, uint256 value) = lens.getPerformance(lazy);
         assertGt(bench, before);
         assertEq(value, 30_000e6, "idle USDC does not move");
     }
 
     function test_benchmark_perShare_unaffectedByWithdrawals() public {
         _moveEthPrice(true);
-        (uint256 bench, uint256 value) = hook.getPerformance(lazy);
+        (uint256 bench, uint256 value) = lens.getPerformance(lazy);
         vm.startPrank(bob);
         hook.claimShares(lazy);
         hook.withdraw(lazy, hook.sharesOf(lazy, bob) / 2, 0, 0);
         vm.stopPrank();
-        (uint256 bench2, uint256 value2) = hook.getPerformance(lazy);
+        (uint256 bench2, uint256 value2) = lens.getPerformance(lazy);
         assertApproxEqRel(bench2 * 2, bench, 1e9);
         assertApproxEqRel(value2 * 2, value, 1e9);
     }
@@ -101,7 +101,7 @@ contract SlashingTest is AvalFixture {
     function test_benchmark_resetsAtSettlement() public {
         _moveEthPrice(true);
         hook.settleEpoch(lazy);
-        (uint256 bench, uint256 value) = hook.getPerformance(lazy);
+        (uint256 bench, uint256 value) = lens.getPerformance(lazy);
         assertApproxEqRel(bench, value, 1e12);
     }
 
@@ -111,33 +111,33 @@ contract SlashingTest is AvalFixture {
 
     function test_slash_lazyVaultWhenEthRises() public {
         _moveEthPrice(true);
-        (, uint256 valueBefore) = hook.getPerformance(lazy);
+        (, uint256 valueBefore) = lens.getPerformance(lazy);
         uint256 expected = _expectedSlash(lazy);
         assertGt(expected, 0);
-        uint256 bondBefore = hook.getVault(lazy).bond;
+        uint256 bondBefore = lens.getVault(lazy).bond;
         uint256 idleBefore = _idleUsdc(lazy);
 
         vm.expectEmit(true, true, false, true, address(hook));
         emit Slashed(lazy, 1, expected);
         hook.settleEpoch(lazy);
 
-        assertEq(hook.getVault(lazy).bond, bondBefore - expected, "bond reduced");
+        assertEq(lens.getVault(lazy).bond, bondBefore - expected, "bond reduced");
         assertEq(_idleUsdc(lazy), idleBefore + expected, "slash lands in idle bond token");
-        assertEq(hook.getVaultValue(lazy), valueBefore + expected, "share price rises");
+        assertEq(lens.getVaultValue(lazy), valueBefore + expected, "share price rises");
     }
 
     function test_slash_followsPolicyRatioAndTolerance() public {
         _moveEthPrice(true);
-        (uint256 bench, uint256 value) = hook.getPerformance(lazy);
+        (uint256 bench, uint256 value) = lens.getPerformance(lazy);
         uint256 shortfall = bench - value - bench * defaultPolicy().toleranceBps / 10_000;
         assertApproxEqAbs(_expectedSlash(lazy), shortfall / 2, 1, "50% of the shortfall beyond 1% tolerance");
     }
 
     function test_noSlash_lazyVaultWhenEthFalls() public {
         _moveEthPrice(false);
-        uint256 bondBefore = hook.getVault(lazy).bond;
+        uint256 bondBefore = lens.getVault(lazy).bond;
         hook.settleEpoch(lazy);
-        assertEq(hook.getVault(lazy).bond, bondBefore);
+        assertEq(lens.getVault(lazy).bond, bondBefore);
     }
 
     /// Holding 50/50 always beats a full-range position (no IL), so it is never slashed.
@@ -146,20 +146,20 @@ contract SlashingTest is AvalFixture {
         depositAs(carol, hold, 15_000e6, 5 ether);
         warpAndRoll(defaultPolicy().epochLength);
         hook.settleEpoch(hold);
-        uint256 bondBefore = hook.getVault(hold).bond;
+        uint256 bondBefore = lens.getVault(hold).bond;
 
         _moveEthPrice(true);
         hook.settleEpoch(hold);
         _moveEthPrice(false);
         hook.settleEpoch(hold);
-        assertEq(hook.getVault(hold).bond, bondBefore);
+        assertEq(lens.getVault(hold).bond, bondBefore);
     }
 
     function test_slash_queuedDepositorDoesNotCapture() public {
         _moveEthPrice(true);
         depositAs(carol, lazy, 10_000e6, 0);
         uint256 slash = _expectedSlash(lazy);
-        (, uint256 bobValueBefore) = hook.getPerformance(lazy);
+        (, uint256 bobValueBefore) = lens.getPerformance(lazy);
         hook.settleEpoch(lazy);
         vm.prank(carol);
         hook.claimShares(lazy);
@@ -176,9 +176,9 @@ contract SlashingTest is AvalFixture {
         hook.claimShares(lazy);
         hook.withdraw(lazy, hook.sharesOf(lazy, bob), 0, 0);
         vm.stopPrank();
-        uint256 bondBefore = hook.getVault(lazy).bond;
+        uint256 bondBefore = lens.getVault(lazy).bond;
         hook.settleEpoch(lazy);
-        assertEq(hook.getVault(lazy).bond, bondBefore);
+        assertEq(lens.getVault(lazy).bond, bondBefore);
     }
 
     // ------------------------------------------------------------------

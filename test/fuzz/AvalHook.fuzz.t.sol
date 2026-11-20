@@ -27,7 +27,7 @@ contract AvalHookFuzzTest is AvalFixture {
         hook.claimShares(id);
         vm.prank(bob);
         hook.claimShares(id);
-        assertLe(hook.sharesOf(id, alice) + hook.sharesOf(id, bob), hook.getVault(id).totalShares);
+        assertLe(hook.sharesOf(id, alice) + hook.sharesOf(id, bob), lens.getVault(id).totalShares);
     }
 
     /// A later depositor who withdraws right away never gets more value (at TWAP) than they put in.
@@ -43,7 +43,7 @@ contract AvalHookFuzzTest is AvalFixture {
 
         depositAs(bob, id, bu, bw);
         settleAfterEpoch(id);
-        uint160 sqrtTwap = TickMath.getSqrtPriceAtTick(hook.getTwapTick(poolId));
+        uint160 sqrtTwap = TickMath.getSqrtPriceAtTick(lens.getTwapTick(poolId));
         (uint256 d0, uint256 d1) = amounts(bu, bw);
         uint256 depositValue = PerformanceLib.valueInBond(d0, d1, sqrtTwap, usdcIs0, false);
 
@@ -74,7 +74,7 @@ contract AvalHookFuzzTest is AvalFixture {
         uint256 shares = hook.sharesOf(id, alice);
         vm.prank(alice);
         hook.withdraw(id, shares, 0, 0);
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         assertEq(v.totalShares, 0);
         assertEq(v.liquidity, 0);
         assertEq(v.idle0, 0);

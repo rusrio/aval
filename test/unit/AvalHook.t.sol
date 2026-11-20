@@ -49,7 +49,7 @@ contract AvalHookTest is AvalFixture {
         (uint160 sqrtPrice,,,) = poolManager.getSlot0(poolId);
         assertEq(sqrtPrice, initSqrtPrice);
 
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         assertEq(v.owner, owner);
         assertEq(v.operator, operator);
         assertEq(v.epochStart, block.timestamp);
@@ -69,7 +69,7 @@ contract AvalHookTest is AvalFixture {
         vm.prank(owner);
         uint256 id = hook.createVault(key, defaultPolicy(), operator, 1_000e6, initSqrtPrice);
         assertEq(before - usdc.balanceOf(owner), 1_000e6);
-        assertEq(hook.getVault(id).bond, 1_000e6);
+        assertEq(lens.getVault(id).bond, 1_000e6);
     }
 
     function test_revert_createVault_staticFee() public {
@@ -111,7 +111,7 @@ contract AvalHookTest is AvalFixture {
 
     function test_revert_externalAddLiquidity() public {
         uint256 id = _activeVault();
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         uint128 liqBefore = poolManager.getLiquidity(poolId);
 
         // A third party (through the PositionManager) cannot add liquidity to an Aval pool.
@@ -137,7 +137,7 @@ contract AvalHookTest is AvalFixture {
         p.cooldown = 120;
         vm.prank(owner);
         hook.setPolicy(id, p);
-        assertEq(hook.getVault(id).policy.cooldown, 120);
+        assertEq(lens.getVault(id).policy.cooldown, 120);
 
         depositAs(alice, id, 1_000e6, 0);
         vm.prank(owner);
@@ -153,7 +153,7 @@ contract AvalHookTest is AvalFixture {
         uint256 id = createDefaultVault();
         depositAs(alice, id, 30_000e6, 10 ether);
 
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         assertEq(v.totalShares, 0);
         assertEq(v.idle0 + v.idle1, 0);
         assertGt(v.pending0 + v.pending1, 0);
@@ -163,7 +163,7 @@ contract AvalHookTest is AvalFixture {
         hook.settleEpoch(id);
 
         settleAfterEpoch(id);
-        v = hook.getVault(id);
+        v = lens.getVault(id);
         assertEq(v.epoch, 1);
         assertEq(v.pending0 + v.pending1, 0);
         assertGt(v.totalShares, 0);
@@ -201,7 +201,7 @@ contract AvalHookTest is AvalFixture {
         vm.prank(alice);
         hook.cancelDeposit(id);
         assertEq(usdc.balanceOf(alice), before);
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         assertEq(v.pending0 + v.pending1, 0);
     }
 
@@ -231,7 +231,7 @@ contract AvalHookTest is AvalFixture {
 
     function test_rebalance_deploysLiquidity() public {
         uint256 id = _activeVault();
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         assertGt(v.liquidity, 0);
         (uint128 liq,,) = poolManager.getPositionInfo(poolId, address(hook), v.tickLower, v.tickUpper, bytes32(id));
         assertEq(liq, v.liquidity);
@@ -243,18 +243,18 @@ contract AvalHookTest is AvalFixture {
         uint256 id = createDefaultVault();
         depositAs(alice, id, 30_000e6, 10 ether);
         settleAfterEpoch(id);
-        uint256 before = hook.getVaultValue(id);
+        uint256 before = lens.getVaultValue(id);
         (int24 lower, int24 upper) = rangeAround(spotTick(), 1200);
         vm.prank(operator);
         hook.rebalance(id, lower, upper);
         // Tokens are deployed at spot but valued at TWAP: only a second-order spot/TWAP divergence remains.
-        assertApproxEqRel(hook.getVaultValue(id), before, 1e11, "no value extracted by rebalance");
+        assertApproxEqRel(lens.getVaultValue(id), before, 1e11, "no value extracted by rebalance");
 
         warpAndRoll(60);
         (lower, upper) = rangeAround(spotTick() + 300, 600);
         vm.prank(operator);
         hook.rebalance(id, lower, upper);
-        assertApproxEqRel(hook.getVaultValue(id), before, 1e11);
+        assertApproxEqRel(lens.getVaultValue(id), before, 1e11);
     }
 
     function test_revert_rebalance_onlyOperator() public {
@@ -361,7 +361,7 @@ contract AvalHookTest is AvalFixture {
         hook.withdraw(id, shares - shares / 2, 0, 0);
         assertApproxEqAbs(usdc.balanceOf(alice), u0 + 30_000e6, 10);
         assertApproxEqAbs(weth.balanceOf(alice), w0 + 10 ether, 1e9);
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         assertEq(v.totalShares, 0);
         assertEq(v.liquidity, 0);
     }
@@ -403,13 +403,13 @@ contract AvalHookTest is AvalFixture {
         uint256 b = hook.createVault(key, defaultPolicy(), operator, DEFAULT_BOND, 0);
         depositAs(bob, b, 10_000e6, 2 ether);
         settleAfterEpoch(b);
-        AvalHook.Vault memory before = hook.getVault(b);
+        AvalHook.Vault memory before = lens.getVault(b);
 
         uint256 shares = hook.sharesOf(a, alice);
         vm.prank(alice);
         hook.withdraw(a, shares, 0, 0);
 
-        AvalHook.Vault memory afterB = hook.getVault(b);
+        AvalHook.Vault memory afterB = lens.getVault(b);
         assertEq(afterB.idle0, before.idle0);
         assertEq(afterB.idle1, before.idle1);
         assertEq(afterB.totalShares, before.totalShares);
@@ -424,7 +424,7 @@ contract AvalHookTest is AvalFixture {
         swap(!usdcIs0, 1 ether); // sell WETH
         int24 newSpot = spotTick();
         warpAndRoll(TWAP_WINDOW * 2);
-        assertApproxEqAbs(int256(hook.getTwapTick(poolId)), int256(newSpot), 1);
+        assertApproxEqAbs(int256(lens.getTwapTick(poolId)), int256(newSpot), 1);
     }
 
     function test_twap_lagsImmediatelyAfterMove() public {
@@ -433,18 +433,18 @@ contract AvalHookTest is AvalFixture {
         int24 before = spotTick();
         swap(!usdcIs0, 3 ether);
         warpAndRoll(1);
-        int24 twap = hook.getTwapTick(poolId);
+        int24 twap = lens.getTwapTick(poolId);
         assertLt(_abs(int256(twap) - int256(before)), _abs(int256(spotTick()) - int256(before)) / 10);
     }
 
     function test_dynamicFee_risesWithDeviation() public {
         _activeVault();
         warpAndRoll(TWAP_WINDOW);
-        assertEq(hook.currentFee(poolId), hook.BASE_FEE());
+        assertEq(lens.currentFee(poolId), hook.BASE_FEE());
         swap(!usdcIs0, 3 ether);
         warpAndRoll(1);
-        assertGt(hook.currentFee(poolId), hook.BASE_FEE());
-        assertLe(hook.currentFee(poolId), hook.MAX_FEE());
+        assertGt(lens.currentFee(poolId), hook.BASE_FEE());
+        assertLe(lens.currentFee(poolId), hook.MAX_FEE());
     }
 
     // ------------------------------------------------------------------
@@ -488,7 +488,7 @@ contract AvalHookTest is AvalFixture {
 
     function test_swapGas_independentOfVaultCount() public {
         uint256 id = _activeVault();
-        AvalHook.Vault memory v = hook.getVault(id);
+        AvalHook.Vault memory v = lens.getVault(id);
         warpAndRoll(TWAP_WINDOW);
 
         uint256 snap = vm.snapshotState();
