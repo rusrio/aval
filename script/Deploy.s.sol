@@ -118,7 +118,9 @@ contract Deploy is Script, Deployers {
             maxRebalancesPerEpoch: 5,
             minWidthTicks: 120,
             maxWidthTicks: 12_000,
-            epochLength: epochLength
+            epochLength: epochLength,
+            toleranceBps: 100,
+            slashRatioBps: 5_000
         });
     }
 

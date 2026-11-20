@@ -108,7 +108,9 @@ abstract contract AvalFixture is BaseTest {
             maxRebalancesPerEpoch: 5,
             minWidthTicks: 120,
             maxWidthTicks: 12_000,
-            epochLength: 600
+            epochLength: 600,
+            toleranceBps: 100,
+            slashRatioBps: 5_000
         });
     }
 

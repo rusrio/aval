@@ -103,6 +103,10 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         uint64 epochStart;
         uint64 lastRebalance;
         uint16 rebalancesThisEpoch;
+        // benchmark, reset at every settlement (zero shares = no benchmark this epoch)
+        uint256 benchValue0;
+        uint256 benchShares0;
+        uint160 benchSqrtPrice0;
     }
 
     struct PendingDeposit {
@@ -152,11 +156,15 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     event BondWithdrawalRequested(uint256 indexed vaultId, uint256 amount, uint64 epoch);
     event BondWithdrawalCancelled(uint256 indexed vaultId);
     event BondWithdrawn(uint256 indexed vaultId, uint256 amount);
+    event Slashed(uint256 indexed vaultId, uint64 indexed epoch, uint256 amount);
+    /// @param vaultValue Vault value at TWAP before the slash (bond token).
+    /// @param benchmarkValue Benchmark scaled to `totalShares` (0 if the epoch started without shares).
     event EpochSettled(
         uint256 indexed vaultId,
         uint64 indexed epoch,
         int24 twapTick,
         uint256 vaultValue,
+        uint256 benchmarkValue,
         uint256 totalShares,
         uint256 depositValue,
         uint256 sharesMinted
@@ -476,29 +484,36 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     // Epochs
     // ------------------------------------------------------------------
 
-    /// @notice Closes the current epoch: values the vault at TWAP and activates queued deposits. Callable by anyone.
-    /// @dev M1: no benchmark/slash yet. Order (final): valuation -> slash -> perf fee -> activate deposits.
+    /// @notice Closes the current epoch. Callable by anyone.
+    /// @dev Order: valuation at TWAP -> slash vs benchmark -> (perf fee, M2) -> activate queued deposits ->
+    ///      start the new epoch's benchmark. Slashed bond moves into the vault's idle bond-token balance before
+    ///      deposits are activated, so it accrues only to LPs that bore the underperformance.
     /// @param vaultId The vault.
     function settleEpoch(uint256 vaultId) external nonReentrant {
         Vault storage v = _vault(vaultId);
         if (block.timestamp < uint256(v.epochStart) + v.policy.epochLength) revert EpochNotOver();
 
         PoolId id = v.key.toId();
-        (, int24 spotTick,,) = poolManager.getSlot0(id);
-        int24 twapTick = _oracles[id].consult(spotTick, twapWindow);
+        int24 twapTick = _twapTick(id);
         uint160 sqrtTwap = TickMath.getSqrtPriceAtTick(twapTick);
         bool bond0 = pools[id].bondIsToken0;
+        uint64 epoch = v.epoch;
+        uint256 totalShares = v.totalShares;
 
         uint256 vaultValue = _vaultValue(vaultId, v, id, sqrtTwap, bond0);
-        uint256 depositValue = PerformanceLib.valueInBond(v.pending0, v.pending1, sqrtTwap, bond0, false);
-        uint256 totalShares = v.totalShares;
-        uint256 minted = PerformanceLib.sharesForDeposit(depositValue, totalShares, vaultValue);
+        uint256 benchmark = _benchmark(v, sqrtTwap, bond0);
+        uint256 slashed =
+            PerformanceLib.slashAmount(benchmark, vaultValue, v.policy.toleranceBps, v.policy.slashRatioBps, v.bond);
+        if (slashed > 0) _slash(vaultId, v, epoch, bond0, slashed);
 
-        uint64 epoch = v.epoch;
+        uint256 depositValue = PerformanceLib.valueInBond(v.pending0, v.pending1, sqrtTwap, bond0, false);
+        uint256 postSlashValue = vaultValue + slashed;
+        uint256 minted = PerformanceLib.sharesForDeposit(depositValue, totalShares, postSlashValue);
+
         epochRates[vaultId][epoch] = EpochRate({
             sqrtPriceX96: sqrtTwap,
             shareNum: totalShares + PerformanceLib.VIRTUAL_SHARES,
-            valueDen: vaultValue + PerformanceLib.VIRTUAL_ASSETS
+            valueDen: postSlashValue + PerformanceLib.VIRTUAL_ASSETS
         });
 
         v.totalShares = totalShares + minted;
@@ -509,8 +524,11 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         v.epoch = epoch + 1;
         v.epochStart = uint64(block.timestamp);
         v.rebalancesThisEpoch = 0;
+        v.benchValue0 = postSlashValue + depositValue;
+        v.benchShares0 = totalShares + minted;
+        v.benchSqrtPrice0 = sqrtTwap;
 
-        emit EpochSettled(vaultId, epoch, twapTick, vaultValue, totalShares, depositValue, minted);
+        emit EpochSettled(vaultId, epoch, twapTick, vaultValue, benchmark, totalShares, depositValue, minted);
     }
 
     // ------------------------------------------------------------------
@@ -596,9 +614,20 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     function getVaultValue(uint256 vaultId) external view returns (uint256) {
         Vault storage v = _vault(vaultId);
         PoolId id = v.key.toId();
-        (, int24 spotTick,,) = poolManager.getSlot0(id);
-        uint160 sqrtTwap = TickMath.getSqrtPriceAtTick(_oracles[id].consult(spotTick, twapWindow));
+        uint160 sqrtTwap = TickMath.getSqrtPriceAtTick(_twapTick(id));
         return _vaultValue(vaultId, v, id, sqrtTwap, pools[id].bondIsToken0);
+    }
+
+    /// @notice Benchmark and vault value at TWAP, both in bond token and for the current total shares.
+    /// @return benchmark Value a passive full-range position would have now (0 if the epoch started empty).
+    /// @return value Active vault value (excludes queued deposits).
+    function getPerformance(uint256 vaultId) external view returns (uint256 benchmark, uint256 value) {
+        Vault storage v = _vault(vaultId);
+        PoolId id = v.key.toId();
+        uint160 sqrtTwap = TickMath.getSqrtPriceAtTick(_twapTick(id));
+        bool bond0 = pools[id].bondIsToken0;
+        value = _vaultValue(vaultId, v, id, sqrtTwap, bond0);
+        benchmark = _benchmark(v, sqrtTwap, bond0);
     }
 
     /// @notice Current dynamic fee (pips) the pool would charge.
@@ -742,6 +771,29 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         int256 center = (int256(tickLower) + int256(tickUpper)) / 2;
         if (_absDiff(center, twap) > p.maxRangeDeviationTicks) revert RangeTooFarFromTwap();
         if (_absDiff(spotTick, twap) > p.maxSpotTwapDeviationBps) revert SpotTooFarFromTwap();
+    }
+
+    /// @dev TWAP tick over `twapWindow`, extrapolated with the current tick. Reverts if the oracle is not warm.
+    function _twapTick(PoolId id) internal view returns (int24) {
+        (, int24 spotTick,,) = poolManager.getSlot0(id);
+        return _oracles[id].consult(spotTick, twapWindow);
+    }
+
+    /// @dev Benchmark for the current total shares; 0 when the epoch started without shares or the vault is empty.
+    function _benchmark(Vault storage v, uint160 sqrtTwap, bool bond0) internal view returns (uint256) {
+        if (v.benchShares0 == 0 || v.totalShares == 0) return 0;
+        return
+            PerformanceLib.benchmarkValue(
+                v.benchValue0, v.benchShares0, v.totalShares, v.benchSqrtPrice0, sqrtTwap, bond0
+            );
+    }
+
+    /// @dev Moves `amount` of bond into the vault's idle bond-token balance (tokens already sit in the hook).
+    function _slash(uint256 vaultId, Vault storage v, uint64 epoch, bool bond0, uint256 amount) internal {
+        v.bond -= amount;
+        if (bond0) v.idle0 += amount;
+        else v.idle1 += amount;
+        emit Slashed(vaultId, epoch, amount);
     }
 
     /// @dev Active value + queued deposits, at TWAP (spot before the oracle is warm), rounded up.

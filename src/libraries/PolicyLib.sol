@@ -14,6 +14,8 @@ library PolicyLib {
     /// @param minWidthTicks Minimum range width (tickUpper - tickLower).
     /// @param maxWidthTicks Maximum range width (tickUpper - tickLower).
     /// @param epochLength Seconds between settlements.
+    /// @param toleranceBps Underperformance vs the benchmark that is not slashed, in bps of the benchmark value.
+    /// @param slashRatioBps Fraction of the shortfall (beyond tolerance) taken from the bond, in bps (< 100%).
     struct Policy {
         uint24 maxRangeDeviationTicks;
         uint24 maxSpotTwapDeviationBps;
@@ -22,6 +24,8 @@ library PolicyLib {
         uint24 minWidthTicks;
         uint24 maxWidthTicks;
         uint32 epochLength;
+        uint16 toleranceBps;
+        uint16 slashRatioBps;
     }
 
     // ------------------------------------------------------------------
@@ -37,6 +41,9 @@ library PolicyLib {
     uint24 internal constant MAX_WIDTH_TICKS = 200_000;
     uint32 internal constant MIN_EPOCH_LENGTH = 60; // minutes-long epochs for the testnet demo
     uint32 internal constant MAX_EPOCH_LENGTH = 30 days;
+    uint16 internal constant MAX_TOLERANCE_BPS = 500;
+    uint16 internal constant MIN_SLASH_RATIO_BPS = 1_000;
+    uint16 internal constant MAX_SLASH_RATIO_BPS = 9_000;
 
     error InvalidPolicy();
 
@@ -50,7 +57,9 @@ library PolicyLib {
             && p.maxRebalancesPerEpoch >= 1 && p.maxRebalancesPerEpoch <= MAX_REBALANCES_PER_EPOCH
             && p.minWidthTicks >= MIN_WIDTH_TICKS && p.maxWidthTicks <= MAX_WIDTH_TICKS
             && p.minWidthTicks <= p.maxWidthTicks && int256(uint256(p.minWidthTicks)) >= int256(tickSpacing)
-            && p.epochLength >= MIN_EPOCH_LENGTH && p.epochLength <= MAX_EPOCH_LENGTH;
+            && p.epochLength >= MIN_EPOCH_LENGTH && p.epochLength <= MAX_EPOCH_LENGTH
+            && p.toleranceBps <= MAX_TOLERANCE_BPS && p.slashRatioBps >= MIN_SLASH_RATIO_BPS
+            && p.slashRatioBps <= MAX_SLASH_RATIO_BPS;
         if (!ok) revert InvalidPolicy();
     }
 }
