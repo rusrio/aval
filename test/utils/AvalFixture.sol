@@ -25,6 +25,8 @@ abstract contract AvalFixture is BaseTest {
 
     uint32 internal constant TWAP_WINDOW = 300;
     uint256 internal constant ETH_PRICE_USDC = 3000;
+    /// @dev Large enough that the TVL cap never binds in non-bond tests (cap = 50M mUSDC).
+    uint256 internal constant DEFAULT_BOND = 5_000_000e6;
 
     MockERC20 internal usdc;
     MockERC20 internal weth;
@@ -112,7 +114,7 @@ abstract contract AvalFixture is BaseTest {
 
     function createDefaultVault() internal returns (uint256 vaultId) {
         vm.prank(owner);
-        vaultId = hook.createVault(key, defaultPolicy(), operator, 0, initSqrtPrice);
+        vaultId = hook.createVault(key, defaultPolicy(), operator, DEFAULT_BOND, initSqrtPrice);
     }
 
     function amounts(uint256 usdcAmount, uint256 wethAmount) internal view returns (uint256 a0, uint256 a1) {

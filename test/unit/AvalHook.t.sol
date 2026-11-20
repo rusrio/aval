@@ -58,7 +58,7 @@ contract AvalHookTest is AvalFixture {
     function test_createVault_secondVaultReusesPool() public {
         createDefaultVault();
         vm.prank(bob);
-        uint256 id2 = hook.createVault(key, defaultPolicy(), bob, 0, 1); // price ignored
+        uint256 id2 = hook.createVault(key, defaultPolicy(), bob, DEFAULT_BOND, 1); // price ignored
         assertEq(id2, 2);
         (uint160 sqrtPrice,,,) = poolManager.getSlot0(poolId);
         assertEq(sqrtPrice, initSqrtPrice);
@@ -76,14 +76,14 @@ contract AvalHookTest is AvalFixture {
         PoolKey memory k = key;
         k.fee = 3000;
         vm.expectRevert(AvalHook.InvalidPoolKey.selector);
-        hook.createVault(k, defaultPolicy(), operator, 0, initSqrtPrice);
+        hook.createVault(k, defaultPolicy(), operator, DEFAULT_BOND, initSqrtPrice);
     }
 
     function test_revert_createVault_wrongTickSpacing() public {
         PoolKey memory k = key;
         k.tickSpacing = 10;
         vm.expectRevert(AvalHook.InvalidPoolKey.selector);
-        hook.createVault(k, defaultPolicy(), operator, 0, initSqrtPrice);
+        hook.createVault(k, defaultPolicy(), operator, DEFAULT_BOND, initSqrtPrice);
     }
 
     function test_revert_createVault_tokenNotAllowed() public {
@@ -94,14 +94,14 @@ contract AvalHookTest is AvalFixture {
         k.currency0 = Currency.wrap(a);
         k.currency1 = Currency.wrap(b);
         vm.expectRevert(AvalHook.TokenNotAllowed.selector);
-        hook.createVault(k, defaultPolicy(), operator, 0, initSqrtPrice);
+        hook.createVault(k, defaultPolicy(), operator, DEFAULT_BOND, initSqrtPrice);
     }
 
     function test_revert_createVault_invalidPolicy() public {
         PolicyLib.Policy memory p = defaultPolicy();
         p.minWidthTicks = 10; // below platform minimum
         vm.expectRevert(PolicyLib.InvalidPolicy.selector);
-        hook.createVault(key, p, operator, 0, initSqrtPrice);
+        hook.createVault(key, p, operator, DEFAULT_BOND, initSqrtPrice);
     }
 
     function test_revert_externalInitialize() public {
@@ -179,7 +179,7 @@ contract AvalHookTest is AvalFixture {
         PolicyLib.Policy memory p = defaultPolicy();
         p.epochLength = 60; // shorter than TWAP window
         vm.prank(owner);
-        uint256 id = hook.createVault(key, p, operator, 0, initSqrtPrice);
+        uint256 id = hook.createVault(key, p, operator, DEFAULT_BOND, initSqrtPrice);
         warpAndRoll(60);
         vm.expectRevert(TwapLib.TwapNotWarm.selector);
         hook.settleEpoch(id);
@@ -400,7 +400,7 @@ contract AvalHookTest is AvalFixture {
     function test_withdraw_doesNotTouchOtherVault() public {
         uint256 a = _activeVault();
         vm.prank(bob);
-        uint256 b = hook.createVault(key, defaultPolicy(), operator, 0, 0);
+        uint256 b = hook.createVault(key, defaultPolicy(), operator, DEFAULT_BOND, 0);
         depositAs(bob, b, 10_000e6, 2 ether);
         settleAfterEpoch(b);
         AvalHook.Vault memory before = hook.getVault(b);
@@ -497,7 +497,7 @@ contract AvalHookTest is AvalFixture {
 
         for (uint256 i; i < 9; ++i) {
             vm.prank(bob);
-            uint256 vid = hook.createVault(key, defaultPolicy(), operator, 0, 0);
+            uint256 vid = hook.createVault(key, defaultPolicy(), operator, DEFAULT_BOND, 0);
             depositAs(bob, vid, 3_000e6, 1 ether);
         }
         warpAndRoll(defaultPolicy().epochLength);

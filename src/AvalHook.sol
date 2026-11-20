@@ -54,6 +54,10 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     /// @notice Minimum value of a single deposit, in bond-token units (1 mUSDC). Checked at spot: manipulating
     ///         spot can only let dust through, which is harmless. Prevents deposits that would mint 0 shares.
     uint256 public constant MIN_DEPOSIT_VALUE = 1e6;
+    /// @notice Minimum bond (mUSDC, 6 decimals) a vault with LPs must keep. Below it the vault enters safe mode (M2).
+    uint256 public constant MIN_BOND = 1_000e6;
+    /// @notice maxTVL = bond * MAX_LEVERAGE (TVL = active value + queued deposits, at TWAP).
+    uint256 public constant MAX_LEVERAGE = 10;
 
     /// @notice The bond token (mUSDC). One side of every pair must be this token.
     address public immutable bondToken;
@@ -92,6 +96,8 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         uint256 pending0;
         uint256 pending1;
         uint256 bond;
+        uint256 bondWithdrawalAmount;
+        uint64 bondWithdrawalEpoch;
         // epochs
         uint64 epoch;
         uint64 epochStart;
@@ -142,6 +148,10 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     event Rebalanced(
         uint256 indexed vaultId, int24 tickLower, int24 tickUpper, uint128 liquidity, int24 twapTick, int24 spotTick
     );
+    event BondAdded(uint256 indexed vaultId, uint256 amount);
+    event BondWithdrawalRequested(uint256 indexed vaultId, uint256 amount, uint64 epoch);
+    event BondWithdrawalCancelled(uint256 indexed vaultId);
+    event BondWithdrawn(uint256 indexed vaultId, uint256 amount);
     event EpochSettled(
         uint256 indexed vaultId,
         uint64 indexed epoch,
@@ -164,6 +174,10 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     error ZeroAmount();
     error DepositTooSmall();
     error DonationsDisabled();
+    error BondTooLow();
+    error TvlCapExceeded();
+    error BondWithdrawalLocked();
+    error NoBondWithdrawal();
     error VaultNotFound();
     error OnlyOwner();
     error OnlyOperator();
@@ -243,6 +257,7 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         _validatePoolKey(key);
         PolicyLib.validate(policy, key.tickSpacing);
         if (operator == address(0)) revert ZeroAddress();
+        if (bondAmount < MIN_BOND) revert BondTooLow();
 
         PoolId id = key.toId();
         if (!pools[id].initialized) _initPool(key, id, sqrtPriceX96);
@@ -297,6 +312,7 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         pd.amount1 += amount1;
         v.pending0 += amount0;
         v.pending1 += amount1;
+        if (_tvl(vaultId, v, id) > v.bond * MAX_LEVERAGE) revert TvlCapExceeded();
 
         _pull(v.key.currency0, amount0);
         _pull(v.key.currency1, amount1);
@@ -366,6 +382,69 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         _push(v.key.currency0, msg.sender, amount0);
         _push(v.key.currency1, msg.sender, amount1);
         emit Withdrawn(vaultId, msg.sender, shares, amount0, amount1);
+    }
+
+    // ------------------------------------------------------------------
+    // Bond
+    // ------------------------------------------------------------------
+
+    /// @notice Adds `amount` of bond token to the vault's bond. Only the owner.
+    /// @param vaultId The vault.
+    /// @param amount Bond to add.
+    function addBond(uint256 vaultId, uint256 amount) external nonReentrant {
+        Vault storage v = _vault(vaultId);
+        if (msg.sender != v.owner) revert OnlyOwner();
+        if (amount == 0) revert ZeroAmount();
+        v.bond += amount;
+        ERC20(bondToken).safeTransferFrom(msg.sender, address(this), amount);
+        emit BondAdded(vaultId, amount);
+    }
+
+    /// @notice Requests a bond withdrawal. It stays slashable and becomes executable after one full epoch
+    ///         (i.e. once the request's epoch and the next one have both been settled). Replaces any prior request.
+    /// @param vaultId The vault.
+    /// @param amount Bond to withdraw.
+    function requestBondWithdrawal(uint256 vaultId, uint256 amount) external {
+        Vault storage v = _vault(vaultId);
+        if (msg.sender != v.owner) revert OnlyOwner();
+        if (amount == 0) revert ZeroAmount();
+        v.bondWithdrawalAmount = amount;
+        v.bondWithdrawalEpoch = v.epoch;
+        emit BondWithdrawalRequested(vaultId, amount, v.epoch);
+    }
+
+    /// @notice Cancels the pending bond withdrawal request.
+    /// @param vaultId The vault.
+    function cancelBondWithdrawal(uint256 vaultId) external {
+        Vault storage v = _vault(vaultId);
+        if (msg.sender != v.owner) revert OnlyOwner();
+        if (v.bondWithdrawalAmount == 0) revert NoBondWithdrawal();
+        v.bondWithdrawalAmount = 0;
+        emit BondWithdrawalCancelled(vaultId);
+    }
+
+    /// @notice Executes the matured bond withdrawal (capped at the current, possibly slashed, bond).
+    /// @dev While the vault holds value, the remaining bond must stay >= MIN_BOND and cover TVL / MAX_LEVERAGE.
+    /// @param vaultId The vault.
+    function executeBondWithdrawal(uint256 vaultId) external nonReentrant {
+        Vault storage v = _vault(vaultId);
+        if (msg.sender != v.owner) revert OnlyOwner();
+        uint256 requested = v.bondWithdrawalAmount;
+        if (requested == 0) revert NoBondWithdrawal();
+        if (v.epoch < uint256(v.bondWithdrawalEpoch) + 2) revert BondWithdrawalLocked();
+
+        uint256 amount = requested < v.bond ? requested : v.bond;
+        uint256 newBond = v.bond - amount;
+        uint256 tvl = _tvl(vaultId, v, v.key.toId());
+        if (tvl >= MIN_DEPOSIT_VALUE) {
+            if (newBond < MIN_BOND) revert BondTooLow();
+            if (tvl > newBond * MAX_LEVERAGE) revert TvlCapExceeded();
+        }
+
+        v.bondWithdrawalAmount = 0;
+        v.bond = newBond;
+        ERC20(bondToken).safeTransfer(msg.sender, amount);
+        emit BondWithdrawn(vaultId, amount);
     }
 
     // ------------------------------------------------------------------
@@ -663,6 +742,16 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         int256 center = (int256(tickLower) + int256(tickUpper)) / 2;
         if (_absDiff(center, twap) > p.maxRangeDeviationTicks) revert RangeTooFarFromTwap();
         if (_absDiff(spotTick, twap) > p.maxSpotTwapDeviationBps) revert SpotTooFarFromTwap();
+    }
+
+    /// @dev Active value + queued deposits, at TWAP (spot before the oracle is warm), rounded up.
+    function _tvl(uint256 vaultId, Vault storage v, PoolId id) internal view returns (uint256) {
+        (uint160 spot, int24 tick,,) = poolManager.getSlot0(id);
+        (bool ok, int24 twap) = _oracles[id].tryConsult(tick, twapWindow);
+        uint160 price = ok ? TickMath.getSqrtPriceAtTick(twap) : spot;
+        bool bond0 = pools[id].bondIsToken0;
+        return _vaultValue(vaultId, v, id, price, bond0)
+            + PerformanceLib.valueInBond(v.pending0, v.pending1, price, bond0, true);
     }
 
     function _vaultValue(uint256 vaultId, Vault storage v, PoolId id, uint160 sqrtTwap, bool bond0)

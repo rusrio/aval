@@ -80,7 +80,7 @@ contract AvalHookFuzzTest is AvalFixture {
         assertEq(v.idle0, 0);
         assertEq(v.idle1, 0);
         // Only rounding dust stays in the hook.
-        assertLe(usdc.balanceOf(address(hook)), 10);
+        assertLe(usdc.balanceOf(address(hook)) - v.bond, 10); // the hook also custodies the bond
         assertLe(weth.balanceOf(address(hook)), 10);
     }
 }
