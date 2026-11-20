@@ -103,6 +103,8 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         uint64 epochStart;
         uint64 lastRebalance;
         uint16 rebalancesThisEpoch;
+        /// @dev Bond below MIN_BOND: operator disabled, deposits blocked, liquidity kept full range.
+        bool safeMode;
         // benchmark, reset at every settlement (zero shares = no benchmark this epoch)
         uint256 benchValue0;
         uint256 benchShares0;
@@ -157,6 +159,8 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     event BondWithdrawalCancelled(uint256 indexed vaultId);
     event BondWithdrawn(uint256 indexed vaultId, uint256 amount);
     event Slashed(uint256 indexed vaultId, uint64 indexed epoch, uint256 amount);
+    event SafeModeEntered(uint256 indexed vaultId, uint256 bond);
+    event SafeModeExited(uint256 indexed vaultId);
     /// @param vaultValue Vault value at TWAP before the slash (bond token).
     /// @param benchmarkValue Benchmark scaled to `totalShares` (0 if the epoch started without shares).
     event EpochSettled(
@@ -186,6 +190,7 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     error TvlCapExceeded();
     error BondWithdrawalLocked();
     error NoBondWithdrawal();
+    error SafeModeActive();
     error VaultNotFound();
     error OnlyOwner();
     error OnlyOperator();
@@ -305,6 +310,7 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     /// @param amount1 Amount of currency1.
     function deposit(uint256 vaultId, uint256 amount0, uint256 amount1) external nonReentrant {
         Vault storage v = _vault(vaultId);
+        if (v.safeMode) revert SafeModeActive();
         if (amount0 == 0 && amount1 == 0) revert ZeroAmount();
         PoolId id = v.key.toId();
         (uint160 spotSqrtPrice,,,) = poolManager.getSlot0(id);
@@ -396,7 +402,8 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     // Bond
     // ------------------------------------------------------------------
 
-    /// @notice Adds `amount` of bond token to the vault's bond. Only the owner.
+    /// @notice Adds `amount` of bond token to the vault's bond. Only the owner. Exits safe mode once the bond is
+    ///         back at `MIN_BOND` (the position stays full range until the operator rebalances).
     /// @param vaultId The vault.
     /// @param amount Bond to add.
     function addBond(uint256 vaultId, uint256 amount) external nonReentrant {
@@ -404,6 +411,10 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         if (msg.sender != v.owner) revert OnlyOwner();
         if (amount == 0) revert ZeroAmount();
         v.bond += amount;
+        if (v.safeMode && v.bond >= MIN_BOND) {
+            v.safeMode = false;
+            emit SafeModeExited(vaultId);
+        }
         ERC20(bondToken).safeTransferFrom(msg.sender, address(this), amount);
         emit BondAdded(vaultId, amount);
     }
@@ -468,6 +479,7 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     function rebalance(uint256 vaultId, int24 tickLower, int24 tickUpper) external nonReentrant {
         Vault storage v = _vault(vaultId);
         if (msg.sender != v.operator) revert OnlyOperator();
+        if (v.safeMode) revert SafeModeActive();
 
         PoolId id = v.key.toId();
         (, int24 spotTick,,) = poolManager.getSlot0(id);
@@ -486,7 +498,7 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
 
     /// @notice Closes the current epoch. Callable by anyone.
     /// @dev Order: valuation at TWAP -> slash vs benchmark -> (perf fee, M2) -> activate queued deposits ->
-    ///      start the new epoch's benchmark. Slashed bond moves into the vault's idle bond-token balance before
+    ///      start the new epoch's benchmark -> safe mode (enter if bond < MIN_BOND; while active, redeploy full range). Slashed bond moves into the vault's idle bond-token balance before
     ///      deposits are activated, so it accrues only to LPs that bore the underperformance.
     /// @param vaultId The vault.
     function settleEpoch(uint256 vaultId) external nonReentrant {
@@ -529,6 +541,7 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         v.benchSqrtPrice0 = sqrtTwap;
 
         emit EpochSettled(vaultId, epoch, twapTick, vaultValue, benchmark, totalShares, depositValue, minted);
+        _safeModeStep(vaultId, v, id, twapTick);
     }
 
     // ------------------------------------------------------------------
@@ -786,6 +799,23 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
             PerformanceLib.benchmarkValue(
                 v.benchValue0, v.benchShares0, v.totalShares, v.benchSqrtPrice0, sqrtTwap, bond0
             );
+    }
+
+    /// @dev Enters safe mode if the bond is below MIN_BOND. While in safe mode, moves everything to a full-range
+    ///      position; skipped (retried next settlement) if spot is beyond the policy's spot/TWAP limit, so spot
+    ///      manipulation can neither force a bad deployment nor block settlement.
+    function _safeModeStep(uint256 vaultId, Vault storage v, PoolId id, int24 twapTick) internal {
+        if (!v.safeMode) {
+            if (v.bond >= MIN_BOND) return;
+            v.safeMode = true;
+            emit SafeModeEntered(vaultId, v.bond);
+        }
+        (, int24 spotTick,,) = poolManager.getSlot0(id);
+        if (_absDiff(spotTick, twapTick) > v.policy.maxSpotTwapDeviationBps) return;
+        int24 lower = TickMath.minUsableTick(v.key.tickSpacing);
+        int24 upper = TickMath.maxUsableTick(v.key.tickSpacing);
+        poolManager.unlock(abi.encode(Action.REBALANCE, vaultId, lower, upper, uint128(0)));
+        emit Rebalanced(vaultId, lower, upper, v.liquidity, twapTick, spotTick);
     }
 
     /// @dev Moves `amount` of bond into the vault's idle bond-token balance (tokens already sit in the hook).
