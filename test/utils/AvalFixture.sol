@@ -130,8 +130,8 @@ abstract contract AvalFixture is BaseTest {
     }
 
     function warpAndRoll(uint256 dt) internal {
-        vm.warp(block.timestamp + dt);
-        vm.roll(block.number + 1);
+        vm.warp(vm.getBlockTimestamp() + dt);
+        vm.roll(vm.getBlockNumber() + 1);
     }
 
     /// @dev Advances time and settles so queued deposits become active.
@@ -142,7 +142,7 @@ abstract contract AvalFixture is BaseTest {
 
     function swap(bool zeroForOne, uint256 amountIn) internal {
         vm.prank(trader);
-        swapRouter.swapExactTokensForTokens(amountIn, 0, zeroForOne, key, "", trader, block.timestamp + 1);
+        swapRouter.swapExactTokensForTokens(amountIn, 0, zeroForOne, key, "", trader, vm.getBlockTimestamp() + 1);
     }
 
     /// @dev Range of `halfWidth` ticks on each side of `center`, aligned to tick spacing.

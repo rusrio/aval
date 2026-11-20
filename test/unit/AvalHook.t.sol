@@ -123,7 +123,7 @@ contract AvalHookTest is AvalFixture {
         );
         params[1] = abi.encode(key.currency0, key.currency1);
         vm.expectRevert();
-        positionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 1);
+        positionManager.modifyLiquidities(abi.encode(actions, params), vm.getBlockTimestamp() + 1);
         vm.stopPrank();
 
         assertEq(poolManager.getLiquidity(poolId), liqBefore);
@@ -481,7 +481,7 @@ contract AvalHookTest is AvalFixture {
     function _measureSwap() internal returns (uint256 used) {
         vm.prank(trader);
         uint256 g = gasleft();
-        swapRouter.swapExactTokensForTokens(0.1 ether, 0, !usdcIs0, key, "", trader, block.timestamp + 1);
+        swapRouter.swapExactTokensForTokens(0.1 ether, 0, !usdcIs0, key, "", trader, vm.getBlockTimestamp() + 1);
         used = g - gasleft();
     }
 

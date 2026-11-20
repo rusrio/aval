@@ -42,18 +42,18 @@ contract TwapLibTest is Test {
     }
 
     function test_notWarmBeforeWindow() public {
-        vm.warp(block.timestamp + WINDOW - 1);
+        vm.warp(vm.getBlockTimestamp() + WINDOW - 1);
         assertFalse(h.isWarm(WINDOW));
         vm.expectRevert(TwapLib.TwapNotWarm.selector);
         h.consult(0, WINDOW);
-        vm.warp(block.timestamp + 1);
+        vm.warp(vm.getBlockTimestamp() + 1);
         assertTrue(h.isWarm(WINDOW));
     }
 
     function testFuzz_constantTick(int24 tick, uint32 dt) public {
         tick = int24(bound(tick, -887_272, 887_272));
         dt = uint32(bound(dt, WINDOW, 30 days));
-        vm.warp(block.timestamp + dt);
+        vm.warp(vm.getBlockTimestamp() + dt);
         assertEq(h.consult(tick, WINDOW), tick);
     }
 
@@ -64,9 +64,9 @@ contract TwapLibTest is Test {
         tB = uint32(bound(tB, 1, WINDOW - 1));
 
         // tick a prevails since init; checkpoint exactly WINDOW ago
-        vm.warp(block.timestamp + WINDOW - tB);
+        vm.warp(vm.getBlockTimestamp() + WINDOW - tB);
         h.update(a, GRAN); // accumulates `a` up to now; from now on tick is b
-        vm.warp(block.timestamp + tB);
+        vm.warp(vm.getBlockTimestamp() + tB);
 
         // Checkpoint used is the init one (exactly WINDOW old).
         int256 expected = (int256(a) * int256(uint256(WINDOW - tB)) + int256(b) * int256(uint256(tB)));
@@ -76,10 +76,10 @@ contract TwapLibTest is Test {
     }
 
     function test_updateOncePerBlock() public {
-        vm.warp(block.timestamp + 100);
+        vm.warp(vm.getBlockTimestamp() + 100);
         h.update(10, GRAN);
         h.update(1_000_000, GRAN); // same timestamp: ignored
-        vm.warp(block.timestamp + WINDOW);
+        vm.warp(vm.getBlockTimestamp() + WINDOW);
         // Window covers only the extrapolated period at tick 10; the same-block update is ignored.
         assertEq(h.consult(10, WINDOW), 10);
     }
@@ -87,7 +87,7 @@ contract TwapLibTest is Test {
     function test_ringBufferCoversWindowUnderHeavyActivity() public {
         // A swap every second for 3 windows: the buffer must still find a checkpoint >= WINDOW old.
         for (uint256 i; i < 3 * WINDOW; ++i) {
-            vm.warp(block.timestamp + 1);
+            vm.warp(vm.getBlockTimestamp() + 1);
             h.update(int24(int256(i % 7)), GRAN);
         }
         assertTrue(h.isWarm(WINDOW));
