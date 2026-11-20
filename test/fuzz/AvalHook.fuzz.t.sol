@@ -11,7 +11,8 @@ contract AvalHookFuzzTest is AvalFixture {
     function _bounded(uint256 usdcRaw, uint256 wethRaw) internal pure returns (uint256 u, uint256 w) {
         u = bound(usdcRaw, 0, 10_000_000e6);
         w = bound(wethRaw, 0, 3_000 ether);
-        if (u == 0 && w == 0) u = 1e6;
+        // Stay above MIN_DEPOSIT_VALUE (1 mUSDC); 1e15 wei of WETH is ~3 mUSDC.
+        if (u < 1e6 && w < 1e15) u += 1e6;
     }
 
     /// Sum of claimed shares never exceeds the shares minted at settlement.
@@ -71,7 +72,6 @@ contract AvalHookFuzzTest is AvalFixture {
         hook.rebalance(id, lower, upper);
 
         uint256 shares = hook.sharesOf(id, alice);
-        vm.assume(shares > 0); // dust deposits worth < 1 bond-token unit mint no shares
         vm.prank(alice);
         hook.withdraw(id, shares, 0, 0);
         AvalHook.Vault memory v = hook.getVault(id);

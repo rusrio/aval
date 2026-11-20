@@ -52,7 +52,7 @@ abstract contract AvalFixture is BaseTest {
         address flags = address(
             uint160(
                 Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
-                    | Hooks.BEFORE_SWAP_FLAG
+                    | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_DONATE_FLAG
             ) ^ (0x4444 << 144)
         );
         address[] memory allowed = new address[](1);

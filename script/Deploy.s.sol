@@ -83,7 +83,7 @@ contract Deploy is Script, Deployers {
     function _deployHook(address usdc, address weth, uint32 twapWindow) internal returns (AvalHook hook) {
         uint160 flags = uint160(
             Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
-                | Hooks.BEFORE_SWAP_FLAG
+                | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_DONATE_FLAG
         );
         address[] memory allowed = new address[](1);
         allowed[0] = weth;

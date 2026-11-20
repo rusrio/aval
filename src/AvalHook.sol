@@ -51,6 +51,9 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     uint24 public constant MAX_FEE = 10_000;
     uint24 public constant FEE_SLOPE_PER_TICK = 50;
     uint24 public constant FREE_DEVIATION_TICKS = 10;
+    /// @notice Minimum value of a single deposit, in bond-token units (1 mUSDC). Checked at spot: manipulating
+    ///         spot can only let dust through, which is harmless. Prevents deposits that would mint 0 shares.
+    uint256 public constant MIN_DEPOSIT_VALUE = 1e6;
 
     /// @notice The bond token (mUSDC). One side of every pair must be this token.
     address public immutable bondToken;
@@ -159,6 +162,8 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     error TokenNotAllowed();
     error ZeroAddress();
     error ZeroAmount();
+    error DepositTooSmall();
+    error DonationsDisabled();
     error VaultNotFound();
     error OnlyOwner();
     error OnlyOperator();
@@ -208,7 +213,7 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
             afterRemoveLiquidity: false,
             beforeSwap: true,
             afterSwap: false,
-            beforeDonate: false,
+            beforeDonate: true,
             afterDonate: false,
             beforeSwapReturnDelta: false,
             afterSwapReturnDelta: false,
@@ -278,6 +283,12 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
     function deposit(uint256 vaultId, uint256 amount0, uint256 amount1) external nonReentrant {
         Vault storage v = _vault(vaultId);
         if (amount0 == 0 && amount1 == 0) revert ZeroAmount();
+        PoolId id = v.key.toId();
+        (uint160 spotSqrtPrice,,,) = poolManager.getSlot0(id);
+        if (
+            PerformanceLib.valueInBond(amount0, amount1, spotSqrtPrice, pools[id].bondIsToken0, false)
+                < MIN_DEPOSIT_VALUE
+        ) revert DepositTooSmall();
         _claim(vaultId, v, msg.sender);
 
         PendingDeposit storage pd = pendingDeposits[vaultId][msg.sender];
@@ -456,6 +467,16 @@ contract AvalHook is BaseHook, IUnlockCallback, ReentrancyGuard {
         returns (bytes4)
     {
         revert OnlyHookLiquidity();
+    }
+
+    /// @dev Donations would land on vault positions as fake fees and distort in-range ratio and benchmark.
+    function _beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
+        internal
+        pure
+        override
+        returns (bytes4)
+    {
+        revert DonationsDisabled();
     }
 
     /// @dev O(1) in the number of vaults: one oracle update + one bounded TWAP read.

@@ -6,6 +6,8 @@ import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
@@ -446,6 +448,41 @@ contract AvalHookTest is AvalFixture {
     }
 
     // ------------------------------------------------------------------
+    // Minimum deposit & donations
+    // ------------------------------------------------------------------
+
+    function test_revert_deposit_belowMinimum() public {
+        uint256 id = createDefaultVault();
+        (uint256 a0, uint256 a1) = amounts(0, 2000); // 2000 wei of WETH, worth << 1 mUSDC
+        vm.prank(alice);
+        vm.expectRevert(AvalHook.DepositTooSmall.selector);
+        hook.deposit(id, a0, a1);
+
+        (a0, a1) = amounts(hook.MIN_DEPOSIT_VALUE() - 1, 0);
+        vm.prank(alice);
+        vm.expectRevert(AvalHook.DepositTooSmall.selector);
+        hook.deposit(id, a0, a1);
+    }
+
+    function test_deposit_atMinimum() public {
+        uint256 id = createDefaultVault();
+        depositAs(alice, id, hook.MIN_DEPOSIT_VALUE(), 0);
+        settleAfterEpoch(id);
+        vm.prank(alice);
+        hook.claimShares(id);
+        assertGt(hook.sharesOf(id, alice), 0);
+    }
+
+    function test_revert_donate() public {
+        _activeVault();
+        Donator donator = new Donator(poolManager);
+        usdc.mint(address(donator), 1_000e6);
+        weth.mint(address(donator), 1 ether);
+        vm.expectRevert();
+        donator.donate(key, 1_000e6, 1 ether);
+    }
+
+    // ------------------------------------------------------------------
     // Gas: swap path is O(1) in the number of vaults (invariant 5)
     // ------------------------------------------------------------------
 
@@ -487,5 +524,28 @@ contract AvalHookTest is AvalFixture {
 
     function _abs(int256 x) internal pure returns (uint256) {
         return x >= 0 ? uint256(x) : uint256(-x);
+    }
+}
+
+/// @dev Minimal unlocker that tries to donate to a pool.
+contract Donator is IUnlockCallback {
+    using CurrencySettler for Currency;
+
+    IPoolManager immutable pm;
+
+    constructor(IPoolManager _pm) {
+        pm = _pm;
+    }
+
+    function donate(PoolKey memory key, uint256 a0, uint256 a1) external {
+        pm.unlock(abi.encode(key, a0, a1));
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        (PoolKey memory key, uint256 a0, uint256 a1) = abi.decode(data, (PoolKey, uint256, uint256));
+        pm.donate(key, a0, a1, "");
+        key.currency0.settle(pm, address(this), a0, false);
+        key.currency1.settle(pm, address(this), a1, false);
+        return "";
     }
 }
